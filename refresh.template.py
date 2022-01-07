@@ -305,7 +305,24 @@ def _all_platform_patch(compile_args: typing.List[str]):
     return list(compile_args)
 
 
-def _get_cpp_command_for_files(compile_action: json):
+def _apply_path_replacements(
+    compile_args: typing.List[str], replacements: typing.Mapping[str, str]
+) -> typing.List[str]:
+    def replace_single(arg):
+        for (prefix, replacement) in replacements.items():
+            if arg.startswith(prefix):
+                return replacement + arg[len(prefix) :]
+            for variant in [f"={prefix}"]:
+                if variant in arg:
+                    return arg.replace(variant, f"={replacement}")
+        return arg
+
+    return [replace_single(arg) for arg in compile_args]
+
+
+def _get_cpp_command_for_files(
+    compile_action: json, replacements: typing.Mapping[str, str]
+):
     """Reformat compile_action into a command clangd can understand.
 
     Undo Bazel-isms and figures out which files clangd should apply the command to.
@@ -316,13 +333,16 @@ def _get_cpp_command_for_files(compile_action: json):
     args = _all_platform_patch(args)
     args = _apple_platform_patch(args)
     # Android: Fine as is; no special patching needed.
+    args = _apply_path_replacements(args, replacements)
 
     source_files, header_files = _get_files(args)
     command = " ".join(args)  # Reformat options as command string
     return source_files, header_files, command
 
 
-def extract(directory: pathlib.Path, aquery_output):
+def extract(
+    directory: pathlib.Path, aquery_output, replacements: typing.Mapping[str, str]
+):
     """
     Input (stdin): jsonproto output from aquery, pre-filtered to
         (Objective-)C(++) compile actions for a given build.
@@ -337,11 +357,14 @@ def extract(directory: pathlib.Path, aquery_output):
     environment variables, etc.
     """
 
+    def worker(compile_action: json):
+        return _get_cpp_command_for_files(compile_action, replacements)
+
     # Process each action from Bazelisms -> file paths and their clang commands
     # Threads instead of processes because most of the execution time is farmed
     # out to subprocesses. No need to sidestep the GIL
     with concurrent.futures.ThreadPoolExecutor() as threadpool:
-        outputs = threadpool.map(_get_cpp_command_for_files, aquery_output.actions)
+        outputs = threadpool.map(worker, aquery_output.actions)
 
     # Dump em to stdout as compile_commands.json entries
     header_file_entries_written = set()
@@ -374,9 +397,34 @@ def extract(directory: pathlib.Path, aquery_output):
             }
 
 
+def call_bazel(
+    directory: pathlib.Path, args: typing.Sequence[str]
+) -> subprocess.CompletedProcess:
+    cmd = (
+        "bazel",
+        *args,
+        "--ui_event_filters=-info",
+        "--noshow_progress",
+    )
+
+    return subprocess.run(
+        cmd,
+        cwd=os.fspath(directory),
+        encoding="utf-8",
+        errors="replace",
+        check=True,
+        stdout=subprocess.PIPE,
+    )
+
+
 # Call with the same flags as `bazel build`, one target per call, followed by flags
 # Yields the entries to compile_commands.json
-def get_commands(directory: pathlib.Path, target: str, flags: str) -> str:
+def get_commands(
+    directory: pathlib.Path,
+    target: str,
+    flags: str,
+    replacements: typing.Mapping[str, str],
+) -> str:
     # Log clear completion messages
     print(f"\033[0;34m>>> Analyzing commands used in {target}\033[0m")
 
@@ -398,22 +446,12 @@ def get_commands(directory: pathlib.Path, target: str, flags: str) -> str:
     # becomes a performance bottleneck compated to binary protos.
 
     cmd = [
-        "bazel",
         "aquery",
         f"mnemonic('(Objc|Cpp)Compile',deps({target}))",
-        "--ui_event_filters=-info",
-        "--noshow_progress",
         "--output=jsonproto",
     ] + shlex.split(flags)
 
-    completed = subprocess.run(
-        cmd,
-        cwd=os.fspath(directory),
-        encoding="utf-8",
-        errors="replace",
-        check=True,
-        stdout=subprocess.PIPE,
-    )
+    completed = call_bazel(directory, cmd)
 
     # Load aquery's output from the proto data being piped to stdin
     # Proto reference: https://github.com/bazelbuild/bazel/blob/master/src/main/protobuf/analysis_v2.proto
@@ -421,6 +459,7 @@ def get_commands(directory: pathlib.Path, target: str, flags: str) -> str:
         directory,
         # object_hook allows object.member syntax, just like a proto, while avoiding the protobuf dependency
         json.loads(completed.stdout, object_hook=lambda d: SimpleNamespace(**d)),
+        replacements,
     )
 
     # Log clear completion messages
@@ -428,13 +467,28 @@ def get_commands(directory: pathlib.Path, target: str, flags: str) -> str:
 
 
 def get_all_commands(directory: pathlib.Path) -> typing.Iterable[str]:
+    # Begin: Template filled by Bazel
     args = [
-        # Begin: Command template filled by Bazel
         # {get_commands}
-        # End: Command template filled by Bazel
     ]
+    replace_output_path = False  # {replace_output_path}
+    replace_external_path = False  # {replace_external_path}
+    # End: Template filled by Bazel
+
+    replacements = dict()
+
+    if replace_output_path or replace_external_path:
+        output_path = pathlib.Path(
+            call_bazel(directory, ("info", "output_path")).stdout.strip()
+        )
+
+        if replace_output_path:
+            replacements["bazel-out/"] = os.fspath(output_path) + "/"
+        if replace_external_path:
+            replacements["external/"] = os.fspath(output_path.parent / "external") + "/"
+
     for (target, flags) in args:
-        yield from get_commands(directory, target, flags)
+        yield from get_commands(directory, target, flags, replacements)
 
 
 if __name__ == "__main__":
