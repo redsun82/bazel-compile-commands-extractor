@@ -17,6 +17,7 @@ Interface (after Bazel's template expansion):
 
 from types import SimpleNamespace
 import concurrent.futures
+import dataclasses
 import functools
 import itertools
 import json
@@ -45,6 +46,12 @@ import typing
 #  already multithreaded for speed (same magnitudespeed win as single-threaded
 #  set).
 # -Anticipated speedup: ~2x (30s to 15s.)
+
+
+@dataclasses.dataclass
+class GetHeaderOptions:
+    skip_header_extraction: bool
+    replacements: typing.Mapping[str, str]
 
 
 def _get_headers(
@@ -115,7 +122,7 @@ def _get_headers(
     return headers
 
 
-def _get_files(compile_args: typing.List[str]):
+def _get_files(compile_args: typing.List[str], skip_header_extraction: bool):
     """Gets the ([source files], [header files]) clangd should be told the command applies to."""
     source_files = [
         arg for arg in compile_args if arg.endswith(_get_files.source_extensions)
@@ -136,6 +143,7 @@ def _get_files(compile_args: typing.List[str]):
     # just be the single source file. Good opportunity to clean that out.
     if (
         source_files[0] in _get_files.assembly_source_extensions
+        or skip_header_extraction
     ):  # Assembly sources that are not preprocessed can't include headers
         return source_files, []
     header_files = _get_headers(compile_args, source_files[0])
@@ -320,9 +328,7 @@ def _apply_path_replacements(
     return [replace_single(arg) for arg in compile_args]
 
 
-def _get_cpp_command_for_files(
-    compile_action: json, replacements: typing.Mapping[str, str]
-):
+def _get_cpp_command_for_files(compile_action: json, options: GetHeaderOptions):
     """Reformat compile_action into a command clangd can understand.
 
     Undo Bazel-isms and figures out which files clangd should apply the command to.
@@ -333,16 +339,14 @@ def _get_cpp_command_for_files(
     args = _all_platform_patch(args)
     args = _apple_platform_patch(args)
     # Android: Fine as is; no special patching needed.
-    args = _apply_path_replacements(args, replacements)
+    args = _apply_path_replacements(args, options.replacements)
 
-    source_files, header_files = _get_files(args)
+    source_files, header_files = _get_files(args, options.skip_header_extraction)
     command = " ".join(args)  # Reformat options as command string
     return source_files, header_files, command
 
 
-def extract(
-    directory: pathlib.Path, aquery_output, replacements: typing.Mapping[str, str]
-):
+def extract(directory: pathlib.Path, aquery_output, options: GetHeaderOptions):
     """
     Input (stdin): jsonproto output from aquery, pre-filtered to
         (Objective-)C(++) compile actions for a given build.
@@ -358,7 +362,7 @@ def extract(
     """
 
     def worker(compile_action: json):
-        return _get_cpp_command_for_files(compile_action, replacements)
+        return _get_cpp_command_for_files(compile_action, options)
 
     # Process each action from Bazelisms -> file paths and their clang commands
     # Threads instead of processes because most of the execution time is farmed
@@ -420,10 +424,7 @@ def call_bazel(
 # Call with the same flags as `bazel build`, one target per call, followed by flags
 # Yields the entries to compile_commands.json
 def get_commands(
-    directory: pathlib.Path,
-    target: str,
-    flags: str,
-    replacements: typing.Mapping[str, str],
+    directory: pathlib.Path, target: str, flags: str, options: GetHeaderOptions
 ) -> str:
     # Log clear completion messages
     print(f"\033[0;34m>>> Analyzing commands used in {target}\033[0m")
@@ -459,7 +460,7 @@ def get_commands(
         directory,
         # object_hook allows object.member syntax, just like a proto, while avoiding the protobuf dependency
         json.loads(completed.stdout, object_hook=lambda d: SimpleNamespace(**d)),
-        replacements,
+        options,
     )
 
     # Log clear completion messages
@@ -471,6 +472,7 @@ def get_all_commands(directory: pathlib.Path) -> typing.Iterable[str]:
     args = [
         # {get_commands}
     ]
+    skip_header_extraction = False  # {skip_header_extraction}
     replace_output_path = False  # {replace_output_path}
     replace_external_path = False  # {replace_external_path}
     # End: Template filled by Bazel
@@ -487,8 +489,12 @@ def get_all_commands(directory: pathlib.Path) -> typing.Iterable[str]:
         if replace_external_path:
             replacements["external/"] = os.fspath(output_path.parent / "external") + "/"
 
+    options = GetHeaderOptions(
+        skip_header_extraction=skip_header_extraction, replacements=replacements
+    )
+
     for (target, flags) in args:
-        yield from get_commands(directory, target, flags, replacements)
+        yield from get_commands(directory, target, flags, options)
 
 
 if __name__ == "__main__":

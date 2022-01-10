@@ -29,6 +29,7 @@ For more, see https://docs.bazel.build/versions/main/guide.html#specifying-targe
 def refresh_compile_commands(
         name,
         targets = None,
+        skip_header_extraction = False,
         replace_output_path = False,
         replace_external_path = False):
     """
@@ -75,6 +76,7 @@ def refresh_compile_commands(
     Args:
       name: Name of the rule
       targets: Specify the targets of interest. Converted as shown above.
+      skip_header_extraction: ...
       replace_output_path: Whether to replace references to `bazel-out/` with an absolute path.
       replace_external_path: Whether to replace references to `external/` with an absolute path.
     """
@@ -89,10 +91,11 @@ def refresh_compile_commands(
     _expand_template(
         name = script_name,
         labels_to_flags = targets,
+        skip_header_extraction = skip_header_extraction,
         replace_output_path = replace_output_path,
         replace_external_path = replace_external_path,
     )
-    native.py_binary(name = name, srcs = [script_name], python_version="PY3")
+    native.py_binary(name = name, srcs = [script_name], python_version = "PY3")
 
 def _expand_template_impl(ctx):
     # Inject targets of interest into refresh.template.py, and set it up to be run.
@@ -103,6 +106,7 @@ def _expand_template_impl(ctx):
         template = ctx.file._script_template,
         substitutions = {
             "        # {get_commands}": "\n".join(["        (%r, %r)," % p for p in ctx.attr.labels_to_flags.items()]),
+            "False # {skip_header_extraction}": str(ctx.attr.skip_header_extraction),
             "False # {replace_output_path}": str(ctx.attr.replace_output_path),
             "False # {replace_external_path}": str(ctx.attr.replace_external_path),
         },
@@ -115,6 +119,7 @@ _expand_template = rule(
         # parsing wildcard target patterns (..., *, :all) in BUILD attributes.
         # # TODO check errors and no build
         "labels_to_flags": attr.string_dict(mandatory = True),
+        "skip_header_extraction": attr.bool(default = False),
         "replace_output_path": attr.bool(default = False),
         "replace_external_path": attr.bool(default = False),
         "_script_template": attr.label(allow_single_file = True, default = "refresh.template.py"),  # TODO workspaces
