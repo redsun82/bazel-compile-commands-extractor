@@ -501,8 +501,9 @@ if __name__ == "__main__":
     # Get workspace's root so compile_commands.json goes the right place
     # -- and so we can invoke Bazel on the repo within this script.
     directory = pathlib.Path(os.environ["BUILD_WORKSPACE_DIRECTORY"])
-    commands = get_all_commands(directory)
+    # We ensure that each entry in our database is unique with the following magic.
+    commands = {frozenset(item.items()):item for item in get_all_commands(directory)}.values()
 
     # Chain output into compile_commands.json
     with open(directory / "compile_commands.json", "w") as fob:
-        json.dump(list(commands), fob)
+        json.dump(list(commands), fob, indent=2)
