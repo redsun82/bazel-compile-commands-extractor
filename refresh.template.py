@@ -68,7 +68,15 @@ def _get_headers(
     # compiler's preprocessing and header searching.
     # Flags reference here:
     # https://clang.llvm.org/docs/ClangCommandLineReference.html
+    if "cl.exe" in compile_args[0]:
+        return _get_headers_msvc(compile_args)
+    return _get_headers_gnu(compile_args, source_path_for_sanity_check)
 
+
+def _get_headers_gnu(
+    compile_args: typing.List[str],
+    source_path_for_sanity_check: typing.Optional[str] = None,
+):
     # Strip out existing dependency file generation that could interfere with ours
     # Clang on Apple doesn't let later flags override earlier ones, unfortunately
     # These flags are prefixed with M for "make", because that's their output format.
@@ -120,6 +128,56 @@ def _get_headers(
     headers = list(set(headers))
 
     return headers
+
+
+def _get_headers_msvc(
+    compile_args: typing.List[str],
+):
+
+    header_cmd = list(compile_args) + ["/showIncludes", "/P"]
+    base = pathlib.Path(header_cmd[0]).parent.parent.parent.parent
+
+    windows_kits = sorted(
+        pathlib.Path("C:\\Program Files (x86)\\Windows Kits\\10\\include").glob("*"),
+    )[-1]
+
+    env = {
+        "INCLUDE": ";".join(
+            (
+                os.fspath(base / "ATLMFC/include"),
+                os.fspath(base / "include"),
+                os.fspath(windows_kits / "ucrt"),
+                os.fspath(windows_kits / "shared"),
+                os.fspath(windows_kits / "um"),
+                os.fspath(windows_kits / "winrt"),
+                os.fspath(windows_kits / "cppwinrt"),
+            )
+        )
+    }
+
+    try:
+        c = subprocess.run(
+            header_cmd,
+            check=True,
+            stderr=subprocess.PIPE,
+            env=dict(os.environ, **env),
+            encoding="utf-8",
+            cwd=os.environ["BUILD_WORKSPACE_DIRECTORY"],
+        )
+        stderr = c.stderr
+    except subprocess.CalledProcessError as e:
+        # Tolerate failure gracefully--during editing the code may not compile!
+        if not e.stderr:  # Worst case, we couldn't get the headers
+            return []
+        stderr = e.stderr  # But often, we can get the headers, despite the error
+
+    headers = (
+        line.replace("Note: including file:", "").strip()
+        for line in stderr.splitlines()
+        if "Note: including file:" in line
+    )
+
+    return list(set(headers))
 
 
 def _get_files(compile_args: typing.List[str], skip_header_extraction: bool):
@@ -501,7 +559,9 @@ if __name__ == "__main__":
     # -- and so we can invoke Bazel on the repo within this script.
     directory = pathlib.Path(os.environ["BUILD_WORKSPACE_DIRECTORY"])
     # We ensure that each entry in our database is unique with the following magic.
-    commands = {frozenset(item.items()):item for item in get_all_commands(directory)}.values()
+    commands = {
+        frozenset(item.items()): item for item in get_all_commands(directory)
+    }.values()
 
     # Chain output into compile_commands.json
     with open(directory / "compile_commands.json", "w") as fob:
