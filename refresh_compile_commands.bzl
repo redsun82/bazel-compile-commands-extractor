@@ -106,9 +106,9 @@ def _expand_template_impl(ctx):
         template = ctx.file._script_template,
         substitutions = {
             "        # {get_commands}": "\n".join(["        (%r, %r)," % p for p in ctx.attr.labels_to_flags.items()]),
-            "False # {skip_header_extraction}": str(ctx.attr.skip_header_extraction),
-            "False # {replace_output_path}": str(ctx.attr.replace_output_path),
-            "False # {replace_external_path}": str(ctx.attr.replace_external_path),
+            "False  # {skip_header_extraction}": str(ctx.attr.skip_header_extraction),
+            "False  # {replace_output_path}": str(ctx.attr.replace_output_path),
+            "False  # {replace_external_path}": str(ctx.attr.replace_external_path),
         },
     )
     return DefaultInfo(executable = script)
