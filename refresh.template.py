@@ -28,12 +28,23 @@ import shlex
 import subprocess
 import typing
 
-# OPTIMNOTE: Most of the runtime of this file--and the output file size--are working around https://github.com/clangd/clangd/issues/123. To work around we have to run clang's preprocessor on files to determine their headers and emit compile commands entries for those headers.
-# There is an optimization that would improve speed. We intentionally haven't done it because it has downsides and we anticipate that this problem will be temporary; clangd improves fast.
-#   The simplest would be to only search for headers once per source file.
-#       Downside: We could miss headers conditionally included, e.g., by platform.
-#       Implementation: skip source files we've already seen in _get_files, shortcutting a bunch of slow preprocessor runs in _get_headers and output. We'd need a threadsafe set, or one set per thread, because header finding is already multithreaded for speed (same magnitudespeed win as single-threaded set).
-#       Anticipated speedup: ~2x (30s to 15s.)
+# OPTIMNOTE: Most of the runtime of this file--and the output file size--are
+# working around https://github.com/clangd/clangd/issues/123. To work around we
+# have to run clang's preprocessor on files to determine their headers and emit
+# compile commands entries for those headers.
+#
+# There is an optimization that would improve speed. We intentionally haven't
+# done it because it has downsides and we anticipate that this problem will be
+# temporary; clangd improves fast.
+#
+# The simplest would be to only search for headers once per source file.
+# - Downside: We could miss headers conditionally included, e.g., by platform.
+# -Implementation: skip source files we've already seen in _get_files,
+#  shortcutting a bunch of slow preprocessor runs in _get_headers and output.
+#  We'd need a threadsafe set, or one set per thread, because header finding is
+#  already multithreaded for speed (same magnitudespeed win as single-threaded
+#  set).
+# -Anticipated speedup: ~2x (30s to 15s.)
 
 
 def _get_headers(
@@ -44,9 +55,12 @@ def _get_headers(
 
     Relatively slow. Requires running the C preprocessor.
     """
-    # Hacky, but hopefully this is a temporary workaround for the clangd issue mentioned in the caller (https://github.com/clangd/clangd/issues/123)
-    # Runs a modified version of the compile command to piggyback on the compiler's preprocessing and header searching.
-    # Flags reference here: https://clang.llvm.org/docs/ClangCommandLineReference.html
+    # Hacky, but hopefully this is a temporary workaround for the clangd issue
+    # mentioned in the caller (https://github.com/clangd/clangd/issues/123)
+    # Runs a modified version of the compile command to piggyback on the
+    # compiler's preprocessing and header searching.
+    # Flags reference here:
+    # https://clang.llvm.org/docs/ClangCommandLineReference.html
 
     # Strip out existing dependency file generation that could interfere with ours
     # Clang on Apple doesn't let later flags override earlier ones, unfortunately
@@ -92,12 +106,11 @@ def _get_headers(
         "Something went wrong in makefile parsing to get headers. First entry should be the source file. Output:\n"
         + headers_makefile_out
     )
-    headers = split[
-        2:
-    ]  # Remove .o and source entries (since they're not headers). Verified above
-    headers = list(
-        set(headers)
-    )  # Make unique. GCC sometimes emits duplicate entries https://github.com/hedronvision/bazel-compile-commands-extractor/issues/7#issuecomment-975109458
+    # Remove .o and source entries (since they're not headers). Verified above
+    headers = split[2:]
+    # Make unique. GCC sometimes emits duplicate entries
+    # https://github.com/hedronvision/bazel-compile-commands-extractor/issues/7#issuecomment-975109458
+    headers = list(set(headers))
 
     return headers
 
@@ -114,8 +127,13 @@ def _get_files(compile_args: typing.List[str]):
     ), f"Multiple sources detected. Might work, but needs testing, and unlikely to be right given bazel. CMD: {compile_args}"
 
     # Note: We need to apply commands to headers and sources.
-    # Why? clangd currently tries to infer commands for headers using files with similar paths. This often works really poorly for header-only libraries. The commands should instead have been inferred from the source files using those libraries... See https://github.com/clangd/clangd/issues/123 for more.
-    # When that issue is resolved, we can stop looking for headers and files can just be the single source file. Good opportunity to clean that out.
+    # Why? clangd currently tries to infer commands for headers using files with
+    # similar paths. This often works really poorly for header-only libraries.
+    # The commands should instead have been inferred from the source files using
+    # those libraries... See https://github.com/clangd/clangd/issues/123 for
+    # more.
+    # When that issue is resolved, we can stop looking for headers and files can
+    # just be the single source file. Good opportunity to clean that out.
     if (
         source_files[0] in _get_files.assembly_source_extensions
     ):  # Assembly sources that are not preprocessed can't include headers
@@ -135,7 +153,8 @@ def _get_files(compile_args: typing.List[str]):
             for arg in compile_args
         )
     ):
-        # Insert at front of (non executable) args, because the --language is only supposed to take effect on files listed thereafter
+        # Insert at front of (non executable) args, because the --language is
+        # only supposed to take effect on files listed thereafter
         compile_args.insert(
             1,
             _get_files.extensions_to_language_args[
@@ -185,9 +204,13 @@ _get_files.extensions_to_language_args = {
 @functools.lru_cache(maxsize=None)
 def _get_apple_SDKROOT(SDK_name: str):
     """Get path to xcode-select'd root for the given OS."""
-    # We're manually building the path because something like `xcodebuild -sdk iphoneos` requires different capitalization and more parsing, and this is a hack anyway until Bazel fixes https://github.com/bazelbuild/bazel/issues/12852
+    # We're manually building the path because something like `xcodebuild -sdk
+    # iphoneos` requires different capitalization and more parsing, and this is
+    # a hack anyway until Bazel fixes
+    # https://github.com/bazelbuild/bazel/issues/12852
     return f"{_get_apple_DEVELOPER_DIR()}/Platforms/{SDK_name}.platform/Developer/SDKs/{SDK_name}.sdk"
-    # Unless xcode-select has been invoked (like for a beta) we'd expect '/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk'
+    # Unless xcode-select has been invoked (like for a beta) we'd expect
+    # '/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk'
     # Traditionally stored in SDKROOT environment variable, but not provided.
 
 
@@ -234,7 +257,10 @@ def _apple_platform_patch(compile_args: typing.List[str]):
         "__BAZEL_XCODE_" in arg for arg in compile_args
     ):  # Bazel internal environment variable fragment that distinguishes Apple platforms
         # Undo Bazel's compiler wrapping.
-        # Bazel wraps the compiler as `external/local_config_cc/wrapped_clang` and exports that wrapped compiler in the proto, and we need a clang call that clangd can introspect. (See notes in "how clangd uses compile_commands.json" in ImplementationReadme.md for more.)
+        # Bazel wraps the compiler as `external/local_config_cc/wrapped_clang`
+        # and exports that wrapped compiler in the proto, and we need a clang
+        # call that clangd can introspect. (See notes in "how clangd uses
+        # compile_commands.json" in ImplementationReadme.md for more.)
         compile_args[0] = _get_apple_active_clang()
 
         # We have to manually substitute out Bazel's macros so clang can parse the command
@@ -265,7 +291,9 @@ def _all_platform_patch(compile_args: typing.List[str]):
     # clangd writes module cache files to the wrong place
     # Without this fix, you get tons of module caches dumped into the VSCode root folder.
     # Filed clangd issue at: https://github.com/clangd/clangd/issues/655
-    # Seems to have disappeared when we switched to aquery from action_listeners, but we'll leave it in until the bug is patched in case we start using C++ modules
+    # Seems to have disappeared when we switched to aquery from
+    # action_listeners, but we'll leave it in until the bug is patched in case
+    # we start using C++ modules
     compile_args = (
         arg
         for arg in compile_args
@@ -296,19 +324,22 @@ def _get_cpp_command_for_files(compile_action: json):
 
 def extract(directory: pathlib.Path, aquery_output):
     """
-    Input (stdin): jsonproto output from aquery, pre-filtered to (Objective-)C(++)
-        compile actions for a given build.
-    Output (stdout): Corresponding entries for a compile_commands.json, with commas after each entry, describing all ways every file is being compiled.
-        Also includes one entry per header, describing one way it is compiled (to work around https://github.com/clangd/clangd/issues/123).
+    Input (stdin): jsonproto output from aquery, pre-filtered to
+        (Objective-)C(++) compile actions for a given build.
+    Output (stdout): Corresponding entries for a compile_commands.json, with
+        commas after each entry, describing all ways every file is being compiled.
+        Also includes one entry per header, describing one way it is compiled (to
+        work around https://github.com/clangd/clangd/issues/123).
 
     Crucially, this de-Bazels the compile commands it takes as input, leaving
-    something clangd can understand. The result is a command that could be run from
-    the workspace root directly, with no bazel-specific compiler wrappers,
+    something clangd can understand. The result is a command that could be run
+    from the workspace root directly, with no bazel-specific compiler wrappers,
     environment variables, etc.
     """
 
     # Process each action from Bazelisms -> file paths and their clang commands
-    # Threads instead of processes because most of the execution time is farmed out to subprocesses. No need to sidestep the GIL
+    # Threads instead of processes because most of the execution time is farmed
+    # out to subprocesses. No need to sidestep the GIL
     with concurrent.futures.ThreadPoolExecutor() as threadpool:
         outputs = threadpool.map(_get_cpp_command_for_files, aquery_output.actions)
 
@@ -318,9 +349,16 @@ def extract(directory: pathlib.Path, aquery_output):
         # Only emit one entry per header
         # This makes the output vastly smaller, which has been a problem for users.
         # e.g. https://github.com/insufficiently-caffeinated/caffeine/pull/577
-        # Without this, we emit an entry for each header for each time it is included, which is explosively duplicative--the same reason why C++ compilation is slow and the impetus for the new modules.
-        # Revert when https://github.com/clangd/clangd/issues/123 is solved, which would remove the need to emit headers, because clangd would take on that work.
-        # If https://github.com/clangd/clangd/issues/681, we'd probably want to find a way to filter to one entry per platform.
+        #
+        # Without this, we emit an entry for each header for each time it is
+        # included, which is explosively duplicative--the same reason why C++
+        # compilation is slow and the impetus for the new modules.
+        #
+        # Revert when https://github.com/clangd/clangd/issues/123 is solved,
+        # which would remove the need to emit headers, because clangd would take
+        # on that work.
+        # If https://github.com/clangd/clangd/issues/681, we'd probably want to
+        # find a way to filter to one entry per platform.
         header_files = [h for h in header_files if h not in header_file_entries_written]
         header_file_entries_written.update(header_files)
 
@@ -344,8 +382,20 @@ def get_commands(directory: pathlib.Path, target: str, flags: str) -> str:
 
     # Queries Bazel's C-family compile actions, and runs them through our extract.py reformatter
     # Aquery docs if you need em: https://docs.bazel.build/versions/master/aquery.html
-    # One bummer, not described in the docs, is that aquery filters over *all* actions for a given target, rather than just those that would be run by a build to produce a given output. This mostly isn't a problem, but can sometimes surface extra, unnecessary, misconfigured actions. Chris has emailed the authors to discuss and filed an issue so anyone reading this could track it: https://github.com/bazelbuild/bazel/issues/14156.
-    # We switched to jsonproto instead of proto because of https://github.com/bazelbuild/bazel/issues/13404. We could change back when fixed--reverting most of the commit that added this line and tweaking the build file to depend on the target in that issue. That said, it's kinda nice to be free of the dependency, unless (OPTIMNOTE) jsonproto becomes a performance bottleneck compated to binary protos.
+    #
+    # One bummer, not described in the docs, is that aquery filters over *all*
+    # actions for a given target, rather than just those that would be run by a
+    # build to produce a given output. This mostly isn't a problem, but can
+    # sometimes surface extra, unnecessary, misconfigured actions. Chris has
+    # emailed the authors to discuss and filed an issue so anyone reading this
+    # could track it: https://github.com/bazelbuild/bazel/issues/14156.
+    #
+    # We switched to jsonproto instead of proto because of
+    # https://github.com/bazelbuild/bazel/issues/13404. We could change back
+    # when fixed--reverting most of the commit that added this line and tweaking
+    # the build file to depend on the target in that issue. That said, it's
+    # kinda nice to be free of the dependency, unless (OPTIMNOTE) jsonproto
+    # becomes a performance bottleneck compated to binary protos.
 
     cmd = [
         "bazel",
