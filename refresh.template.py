@@ -134,7 +134,7 @@ def _get_headers_msvc(
     compile_args: typing.List[str],
 ):
 
-    header_cmd = list(compile_args) + ["/showIncludes", "/P"]
+    header_cmd = list(compile_args) + ["/showIncludes", "/EP"]
     base = pathlib.Path(header_cmd[0]).parent.parent.parent.parent
 
     windows_kits = sorted(
@@ -160,6 +160,7 @@ def _get_headers_msvc(
             header_cmd,
             check=True,
             stderr=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
             env=dict(os.environ, **env),
             encoding="utf-8",
             cwd=os.environ["BUILD_WORKSPACE_DIRECTORY"],
