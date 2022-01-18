@@ -379,12 +379,14 @@ def _apply_path_replacements(
         for (prefix, replacement) in replacements.items():
             if arg.startswith(prefix):
                 return replacement + arg[len(prefix) :]
-            for variant in [f"={prefix}"]:
-                if variant in arg:
-                    return arg.replace(variant, f"={replacement}")
+            for variant in ("={}", "/I{}"):
+                if variant.format(prefix) in arg:
+                    return arg.replace(variant.format(prefix), variant.format(replacement))
+
         return arg
 
-    return [replace_single(arg) for arg in compile_args]
+    res = (replace_single(arg) for arg in compile_args)
+    return [arg[0] + arg[1:].replace("/", "\\") for arg in res]
 
 
 def _get_cpp_command_for_files(compile_action: json, options: GetHeaderOptions):
