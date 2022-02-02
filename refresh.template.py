@@ -15,6 +15,7 @@ Interface (after Bazel's template expansion):
   you!) can look at to figure out how files are being compiled by Bazel
 """
 
+import platform
 from types import SimpleNamespace
 import concurrent.futures
 import dataclasses
@@ -386,7 +387,9 @@ def _apply_path_replacements(
         return arg
 
     res = (replace_single(arg) for arg in compile_args)
-    return [arg[0] + arg[1:].replace("/", "\\") for arg in res]
+    if platform.system() == "Windws":
+        res = (arg[0] + arg[1:].replace("/", "\\") for arg in res)
+    return list(res)
 
 
 def _get_cpp_command_for_files(compile_action: json, options: GetHeaderOptions):
