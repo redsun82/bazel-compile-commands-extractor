@@ -30,10 +30,6 @@ import subprocess
 import types
 import typing # MIN_PY=3.9: Switch e.g. typing.List[str] -> list[str]
 
-# Backport shlex.join (PY_MIN=3.8)
-if not hasattr(shlex, 'join'):
-    shlex.join = lambda args: ' '.join(shlex.quote(arg) for arg in args)
-
 
 # OPTIMNOTE: Most of the runtime of this file--and the output file size--are working around https://github.com/clangd/clangd/issues/123. To work around we have to run clang's preprocessor on files to determine their headers and emit compile commands entries for those headers.
 # There is an optimization that would improve speed. We intentionally haven't done it because it has downsides and we anticipate that this problem will be temporary; clangd improves fast. 
@@ -310,8 +306,7 @@ def _get_cpp_command_for_files(compile_action):
     # Android and Linux and grailbio LLVM toolchains: Fine as is; no special patching needed.
 
     source_files, header_files = _get_files(args)
-    command = shlex.join(args) # Reformat options as command string, escaping spaces
-    return source_files, header_files, command
+    return source_files, header_files, args
 
 
 def _convert_compile_commands(aquery_output):
@@ -333,7 +328,7 @@ def _convert_compile_commands(aquery_output):
 
     # Yield as compile_commands.json entries
     header_file_entries_written = set()
-    for source_files, header_files, command in outputs:
+    for source_files, header_files, args in outputs:
         # Only emit one entry per header
         # This makes the output vastly smaller, which has been a problem for users.
         # e.g. https://github.com/insufficiently-caffeinated/caffeine/pull/577
@@ -346,7 +341,7 @@ def _convert_compile_commands(aquery_output):
         for file in itertools.chain(source_files, header_files):
             yield {
                 "file": file,
-                "command": command,
+                "arguments": args,
                 # Bazel gotcha warning: If you were tempted to use `bazel info execution_root` as the build working directory for compile_commands...search ImplementationReadme.md to learn why that breaks.
                 "directory": os.environ["BUILD_WORKSPACE_DIRECTORY"],
             }
